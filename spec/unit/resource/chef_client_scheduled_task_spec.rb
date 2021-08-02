@@ -107,15 +107,22 @@ describe Chef::Resource::ChefClientScheduledTask do
     expect(resource.use_consistent_splay).to eql(true)
   end
 
-  context "when configured to use a consistent splay" do
+  context "when configured to use a consistent splay and snap start time to frequency" do
+    let(:now) { Time.new("2021", "4", "15", "16", "7", "12") }
+
     before do
       node.automatic_attrs[:shard_seed] = nil
       allow(node).to receive(:name).and_return("test_node")
+      allow(Time).to receive(:now).and_return(now)
       resource.config_directory = "C:/chef" # Allows local unit testing on nix flavors
       resource.use_consistent_splay = true
+      resource.snap_time_to_frequency = true
     end
 
-    it "sleeps the same amount each time based on splay before running the task" do
+    it "schedules the task to a snapped time and sleeps the same amount each time based on splay before running the task" do
+      provider.start_time_value
+      expect(provider.start_time_value).to eql("16:30")
+      expect(resource.start_date).to eql("04/15/2021")
       expect(provider.full_command).to eql("C:\\Windows\\System32\\cmd.exe /c \"C:/windows/system32/windowspowershell/v1.0/powershell.exe Start-Sleep -s 272 && C:/opscode/chef/bin/chef-client -L C:/chef/log/client.log -c C:/chef/client.rb\"")
     end
   end
@@ -149,6 +156,48 @@ describe Chef::Resource::ChefClientScheduledTask do
       node.automatic_attrs[:shard_seed] = nil
       allow(node).to receive(:name).and_return("test_node")
       expect(provider.splay_sleep_time(300)).to satisfy { |v| v >= 0 && v <= 300 }
+    end
+  end
+
+  describe "#start_time_value" do
+    context "when snap_time_to_frequency is false" do
+      context "when new_resource.start_time is not set" do
+        it "returns nil" do
+          expect(provider.start_time_value).to eql(nil)
+        end
+      end
+
+      context "when new_resource.start_time is set explicitly" do
+        before { resource.start_time = "14:15" }
+
+        it "returns the explicit value" do
+          expect(provider.start_time_value).to eql(resource.start_time)
+        end
+      end
+    end
+
+    context "when snap_time_to_frequency is true" do
+      before { resource.snap_time_to_frequency = true }
+
+      context "when frequency is minute" do
+        let(:now) { Time.new("2021", "4", "15", "16", "7", "12") }
+
+        before do
+          allow(Time).to receive(:now).and_return(now)
+        end
+
+        it "returns the calculated start time" do
+          expect(provider.start_time_value).to eql("16:30")
+        end
+      end
+
+      context "when frequency is not minute" do
+        before { resource.frequency = "daily" }
+
+        it "returns the resource start_time as is" do
+          expect(provider.start_time_value).to eql(resource.start_time)
+        end
+      end
     end
   end
 

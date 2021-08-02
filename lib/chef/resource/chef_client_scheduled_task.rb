@@ -65,6 +65,15 @@ class Chef
         use_consistent_splay true
       end
       ```
+
+      **Run #{ChefUtils::Dist::Infra::PRODUCT} to run using the default 30 minute cadence, snapped to top of the hour and half hour**:
+
+      ```ruby
+      chef_client_scheduled_task 'Run chef-client like cron' do
+        snap_time_to_frequency true
+      end
+      ```
+
       DOC
 
       resource_name :chef_client_scheduled_task
@@ -93,6 +102,9 @@ class Chef
         default: lazy { frequency == "minute" ? 30 : 1 },
         default_description: "30 if frequency is 'minute', 1 otherwise"
 
+      property :snap_time_to_frequency, [true, false],
+        default: false
+
       property :accept_chef_license, [true, false],
         description: "Accept the Chef Online Master License and Services Agreement. See <https://www.chef.io/online-master-agreement>",
         default: false
@@ -102,7 +114,7 @@ class Chef
         regex: [%r{^[0-1][0-9]\/[0-3][0-9]\/\d{4}$}]
 
       property :start_time, String,
-        description: "The start time for the task in HH:mm format (ex: 14:00). If the frequency is minute default start time will be Time.now plus the frequency_modifier number of minutes.",
+        description: "The start time for the task in HH:mm format (ex: 14:00). If the frequency is minute default start time will be Time.now plus the frequency_modifier number of minutes, unless the snap_time_to_frequency property is true.",
         regex: [/^\d{2}:\d{2}$/]
 
       property :splay, [Integer, String],
@@ -167,7 +179,7 @@ class Chef
           password                       new_resource.password
           frequency                      new_resource.frequency.to_sym
           frequency_modifier             new_resource.frequency_modifier if frequency_supports_frequency_modifier?
-          start_time                     new_resource.start_time
+          start_time                     start_time_value
           start_day                      new_resource.start_date unless new_resource.start_date.nil?
           random_delay                   new_resource.splay if frequency_supports_random_delay? && !new_resource.use_consistent_splay
           disallow_start_if_on_batteries new_resource.splay unless new_resource.run_on_battery
@@ -252,6 +264,35 @@ class Chef
         def frequency_supports_frequency_modifier?
           # these are the only ones that don't
           !%w{once on_logon onstart on_idle}.include?(new_resource.frequency)
+        end
+
+        #
+        # When snapping the start time to the frequency, compute the start time based on the previous top of the hour and frequency,
+        # and as a side effect also set the start date to the current date.
+        #
+        # @return [NilClass,String] The start time
+        #
+        def start_time_value
+          return new_resource.start_time unless new_resource.snap_time_to_frequency && new_resource.frequency == "minute"
+
+          snap_time = snap_time(new_resource.frequency_modifier)
+          new_resource.start_date = snap_time.strftime("%m/%d/%Y")
+          snap_time.strftime("%H:%M")
+        end
+
+        #
+        # Computes a snap time at the next start of the frequency cycle, where the frequency cycle begins
+        # at the top of the current hour and increments by frequency_modifier in minutes. Only applicable when frequency is 'minute'
+        #
+        # @param [Integer] frequency_modifier - The frequency modifier in minutes
+        #
+        # @return [Time] The next snap-to time on the frequency cycle computed from top of the previous hour
+        #
+        def snap_time(frequency_modifier)
+          ref_time = Time.now
+          snap = Time.new(ref_time.year, ref_time.mon, ref_time.day, ref_time.hour, 0, 0)
+          minutes = (ref_time.min + frequency_modifier) - (ref_time.min % frequency_modifier)
+          snap + (minutes * 60)
         end
       end
     end
